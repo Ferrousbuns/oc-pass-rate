@@ -1,0 +1,389 @@
+document.addEventListener('DOMContentLoaded', () => {
+    // --- UI Elements --- //
+    const searchWrapper = document.getElementById('searchWrapper');
+    const searchInput = document.getElementById('searchInput');
+    const tableContainer = document.getElementById('tableContainer');
+    const tableBody = document.getElementById('tableBody');
+    const tableHead = document.getElementById('tableHead');
+    const emptyState = document.getElementById('emptyState');
+    const tableStats = document.getElementById('tableStats');
+    const loadingText = document.getElementById('loadingText');
+    const loadingSubtext = document.getElementById('loadingSubtext');
+    const loadingSpinner = document.getElementById('loadingSpinner');
+
+    // Columns Menu
+    const columnsBtn = document.getElementById('columnsBtn');
+    const columnsMenu = document.getElementById('columnsMenu');
+    const columnsList = document.getElementById('columnsList');
+
+    // Dropdown Elements
+    const ocSelect = document.getElementById('ocSelect');
+
+    // --- State --- //
+    let csvData = [];
+    let headers = [];
+    let hiddenColumns = new Set();
+    let sortColumn = null;
+    let sortDirection = 'asc';
+
+    // --- Hardcoded List of OC Files (based on listing) --- //
+    const ocFiles = [
+        "Best of the Lot_T2",
+        "Blast from the Past_T7",
+        "Break the Bank_T8",
+        "Cash Me if You Can_T2",
+        "Clinical Precision_T8",
+        "Counter Offer_T5",
+        "Gaslight the Way_T3",
+        "Guardian Ãngels_T5",
+        "Honey Trap_T5",
+        "Honey Trap_T6",
+        "Leave No Trace_T5",
+        "Leave No Trace_T6",
+        "Market Forces_T3",
+        "Mob Mentality_T1",
+        "No Reserve_T5",
+        "Plucking the Lotus Petal_T4",
+        "Smoke and Wing Mirrors_T3",
+        "Sneaky Git Grab_T6",
+        "Snow Blind_T4",
+        "Stage Fright_T4"
+    ];
+
+    // --- Sort OC Files by Tier --- //
+    ocFiles.sort((a, b) => {
+        const getTier = (name) => {
+            const match = name.match(/_T(\d+)$/);
+            return match ? parseInt(match[1], 10) : 0;
+        };
+        return getTier(a) - getTier(b); // Ascending order
+    });
+
+    // --- Initialization --- //
+    initDropdown();
+
+    function initDropdown() {
+        if (ocFiles.length === 0) {
+            loadingText.textContent = 'No OC Data Found';
+            loadingSubtext.textContent = 'Ensure CSV files exist in the data/ folder.';
+            loadingSpinner.style.display = 'none';
+            return;
+        }
+
+        ocSelect.innerHTML = '';
+
+        ocFiles.forEach((ocName) => {
+            const option = document.createElement('option');
+            option.value = `${ocName}.csv`;
+            option.textContent = ocName.replace(/_/g, ' '); // Clean up name for display
+            ocSelect.appendChild(option);
+        });
+
+        ocSelect.addEventListener('change', (e) => {
+            loadCsvData(`data/${e.target.value}`);
+        });
+
+        // Trigger first load
+        if (ocSelect.value) {
+            loadCsvData(`data/${ocSelect.value}`);
+        }
+    }
+
+
+    // --- Data Loading --- //
+    function loadCsvData(filePath) {
+        // Show loading state
+        emptyState.classList.remove('hidden');
+        tableContainer.classList.add('hidden');
+        loadingText.textContent = 'Loading OC Data...';
+        loadingSubtext.textContent = `Fetching ${filePath}`;
+        loadingSpinner.style.display = 'block';
+        loadingSpinner.classList.add('spin');
+
+        // Reset state
+        csvData = [];
+        headers = [];
+        // We do *not* reset hiddenColumns here so column preferences persist between tabs
+        searchInput.value = '';
+        sortColumn = null;
+
+        Papa.parse(filePath, {
+            download: true,
+            header: true,
+            skipEmptyLines: true,
+            complete: function (results) {
+                if (results.data && results.data.length > 0) {
+                    csvData = results.data;
+                    headers = results.meta.fields || Object.keys(csvData[0]);
+
+                    // Default sort to the first column (usually 'User') if none selected yet
+                    if (!sortColumn) {
+                        sortColumn = headers[0];
+                    }
+
+                    setupColumnsMenu();
+
+                    // Show UI elements
+                    emptyState.classList.add('hidden');
+                    tableContainer.classList.remove('hidden');
+
+                    // Sort and Render
+                    sortData();
+                } else {
+                    showErrorState('Data Not Found', 'The selected OC data appears to be empty or malformed.');
+                }
+            },
+            error: function (error) {
+                console.error("Error parsing CSV:", error);
+                showErrorState('Error Loading Data', `Failed to load ${filePath}. Ensure the local server is running.`);
+            }
+        });
+    }
+
+    function showErrorState(title, subtext) {
+        emptyState.classList.remove('hidden');
+        tableContainer.classList.add('hidden');
+        loadingText.textContent = title;
+        loadingSubtext.textContent = subtext;
+        loadingSpinner.style.display = 'none';
+        loadingSpinner.classList.remove('spin');
+    }
+
+
+    // --- Columns Menu Toggle --- //
+    if (columnsBtn && columnsMenu) {
+        columnsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            columnsMenu.classList.toggle('hidden');
+        });
+
+        // Close when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!columnsMenu.contains(e.target) && e.target !== columnsBtn) {
+                columnsMenu.classList.add('hidden');
+            }
+        });
+    }
+
+    function setupColumnsMenu() {
+        if (!columnsList) return;
+
+        columnsList.innerHTML = '';
+        headers.forEach(header => {
+            const label = document.createElement('label');
+            label.className = 'column-toggle-label';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'column-toggle-checkbox';
+            // Check if it was previously hidden
+            checkbox.checked = !hiddenColumns.has(header);
+            checkbox.value = header;
+
+            checkbox.addEventListener('change', (e) => {
+                if (e.target.checked) {
+                    hiddenColumns.delete(header);
+                } else {
+                    hiddenColumns.add(header);
+                }
+                sortData(); // re-render table with current sort and search
+            });
+
+            label.appendChild(checkbox);
+            label.appendChild(document.createTextNode(header));
+            columnsList.appendChild(label);
+        });
+    }
+
+    // --- Hide Zeros Toggle --- //
+    const hideZerosBtn = document.getElementById('hideZerosBtn');
+    let hideZeroPassRates = false;
+
+    if (hideZerosBtn) {
+        hideZerosBtn.addEventListener('click', () => {
+            hideZeroPassRates = !hideZeroPassRates;
+            hideZerosBtn.classList.toggle('active', hideZeroPassRates);
+            hideZerosBtn.setAttribute('aria-pressed', hideZeroPassRates);
+            sortData();
+        });
+    }
+
+    // --- Data Filtering Helper --- //
+    function getFilteredData() {
+        let currentData = csvData;
+
+        // Apply Hide Zeros filter
+        if (hideZeroPassRates) {
+            currentData = currentData.filter(row => {
+                let hasPositivePassRate = false;
+                // Check all columns except the first one (typically 'User')
+                for (let i = 1; i < headers.length; i++) {
+                    const val = row[headers[i]];
+                    const num = Number(String(val).replace(/,/g, ''));
+                    if (!isNaN(num) && num > 0) {
+                        hasPositivePassRate = true;
+                        break;
+                    }
+                }
+                return hasPositivePassRate;
+            });
+        }
+
+        // Apply Search Filter
+        const searchTerm = searchInput.value.toLowerCase().trim();
+        if (searchTerm) {
+            currentData = currentData.filter(row => {
+                return Object.values(row).some(value => {
+                    if (value === null || value === undefined) return false;
+                    return String(value).toLowerCase().includes(searchTerm);
+                });
+            });
+        }
+
+        return { data: currentData, highlightTerm: searchTerm };
+    }
+
+    // --- Search Handler --- //
+    searchInput.addEventListener('input', () => {
+        sortData();
+    });
+
+    // --- Table Rendering --- //
+    function renderTable(data, highlightTerm = '') {
+        // Clear previous content
+        tableHead.innerHTML = '';
+        tableBody.innerHTML = '';
+
+        // Update Stats
+        tableStats.innerHTML = `
+            <span>Showing ${data.length} ${data.length === 1 ? 'member' : 'members'}</span>
+            ${highlightTerm ? '<span>(Filtered)</span>' : ''}
+        `;
+
+        const visibleCols = headers.length - hiddenColumns.size;
+
+        if (data.length === 0) {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = visibleCols > 0 ? visibleCols : 1;
+            td.textContent = 'No matching results found.';
+            td.style.textAlign = 'center';
+            td.style.padding = '40px';
+            td.style.color = '#94a3b8';
+            tr.appendChild(td);
+            tableBody.appendChild(tr);
+
+            renderHeaders();
+            return;
+        }
+
+        renderHeaders();
+
+        // Limit rendering to prevent browser freeze on huge CSVs
+        const maxRender = Math.min(data.length, 5000);
+        const fragment = document.createDocumentFragment();
+
+        for (let i = 0; i < maxRender; i++) {
+            const row = data[i];
+            const tr = document.createElement('tr');
+
+            headers.forEach(header => {
+                if (hiddenColumns.has(header)) return;
+
+                const td = document.createElement('td');
+                let cellValue = row[header] !== undefined && row[header] !== null ? String(row[header]) : '';
+
+                // Add highlighting if search term is active
+                if (highlightTerm && cellValue.toLowerCase().includes(highlightTerm)) {
+                    const regex = new RegExp(`(${escapeRegExp(highlightTerm)})`, 'gi');
+                    td.innerHTML = cellValue.replace(regex, '<mark>$1</mark>');
+                } else {
+                    td.textContent = cellValue;
+                }
+
+                // Optional styling for numeric columns (crimes types)
+                if (!isNaN(Number(cellValue)) && cellValue !== "") {
+                    // It's a number.
+                    if (Number(cellValue) > 0) {
+                        td.style.color = '#10b981'; // Green for positive pass rates
+                        td.style.fontWeight = '600';
+                    } else if (Number(cellValue) === 0) {
+                        td.style.opacity = '0.5'; // Dim zeros
+                    }
+                }
+
+                tr.appendChild(td);
+            });
+
+            fragment.appendChild(tr);
+        }
+
+        tableBody.appendChild(fragment);
+    }
+
+    function renderHeaders() {
+        if (!headers || headers.length === 0) return;
+
+        const tr = document.createElement('tr');
+        headers.forEach(header => {
+            if (hiddenColumns.has(header)) return;
+
+            const th = document.createElement('th');
+            th.className = 'sortable-header';
+
+            let sortIndicator = '<span class="sort-icon">' + (sortColumn === header ? (sortDirection === 'asc' ? '↑' : '↓') : '↕') + '</span>';
+            if (sortColumn === header) {
+                th.classList.add('active-sort');
+            }
+
+            th.innerHTML = `<span>${header}</span>${sortIndicator}`;
+
+            th.addEventListener('click', () => {
+                if (sortColumn === header) {
+                    sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+                } else {
+                    sortColumn = header;
+                    sortDirection = 'desc'; // Default to desc when switching to new col for pass rates
+                }
+                sortData();
+            });
+            tr.appendChild(th);
+        });
+        tableHead.appendChild(tr);
+    }
+
+    function sortData() {
+        if (sortColumn) {
+            csvData.sort((a, b) => {
+                let valA = a[sortColumn];
+                let valB = b[sortColumn];
+
+                if (valA === undefined || valA === null) valA = '';
+                if (valB === undefined || valB === null) valB = '';
+
+                // Handle numbers (pass rates)
+                const numA = Number(String(valA).replace(/,/g, ''));
+                const numB = Number(String(valB).replace(/,/g, ''));
+
+                if (!isNaN(numA) && !isNaN(numB) && String(valA).trim() !== '' && String(valB).trim() !== '') {
+                    return sortDirection === 'asc' ? numA - numB : numB - numA;
+                }
+
+                // Fallback string sorting
+                valA = String(valA).toLowerCase();
+                valB = String(valB).toLowerCase();
+
+                if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+                if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+                return 0;
+            });
+        }
+
+        const { data: filteredData, highlightTerm } = getFilteredData();
+        renderTable(filteredData, highlightTerm);
+    }
+
+    function escapeRegExp(string) {
+        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+});
